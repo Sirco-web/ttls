@@ -5,9 +5,8 @@
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "USE_PYTHON_STT=1 node server.js",
-    "dev": "USE_PYTHON_STT=1 NODE_ENV=development node server.js",
-    "postinstall": "sh ./install.sh"
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
