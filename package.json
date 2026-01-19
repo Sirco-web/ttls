@@ -1,0 +1,19 @@
+{
+  "name": "voice-text-room",
+  "version": "1.0.0",
+  "description": "Lightweight voice-to-text + text chat rooms (5-digit codes) with server-side Whisper STT.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "USE_PYTHON_STT=1 node server.js",
+    "dev": "USE_PYTHON_STT=1 NODE_ENV=development node server.js",
+    "postinstall": "sh ./install.sh"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

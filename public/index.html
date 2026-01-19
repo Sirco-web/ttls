@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Voice ⇄ Text Room</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main id="app">
+    <section id="screen-home" class="screen">
+      <h1 class="title">Voice ⇄ Text</h1>
+
+      <div class="card">
+        <label class="label">Your name (optional)</label>
+        <input id="name" class="input" maxlength="20" placeholder="Timour" />
+
+        <div class="row">
+          <button id="btn-create" class="btn primary">Create link</button>
+          <button id="btn-join" class="btn">Join link</button>
+        </div>
+
+        <div id="join-row" class="row hidden">
+          <input id="room" class="input" inputmode="numeric" maxlength="5" placeholder="12345" />
+          <button id="btn-join-go" class="btn primary">Join</button>
+        </div>
+
+        <p class="tiny" id="home-hint">
+          Creates a 5-digit room code. Share it. Only text messages go over the network.
+        </p>
+      </div>
+    </section>
+
+    <section id="screen-wait" class="screen hidden">
+      <div class="code-wrap">
+        <div class="code-title">Share this room code</div>
+        <div id="big-code" class="big-code">00000</div>
+        <div class="row center">
+          <button id="btn-copy" class="btn">Copy link</button>
+          <button id="btn-leave" class="btn danger">Leave</button>
+        </div>
+        <p class="tiny center" id="wait-hint">Waiting for another person to join…</p>
+      </div>
+    </section>
+
+    <section id="screen-chat" class="screen hidden">
+      <header class="top">
+        <div class="who">
+          <span id="lbl-you" class="pill">You</span>
+          <span id="lbl-other" class="pill">Other</span>
+        </div>
+        <div class="roompill">
+          <span id="room-code" class="code">00000</span>
+          <button id="btn-leave-2" class="icon danger" title="Leave">⨯</button>
+        </div>
+      </header>
+
+      <section class="last">
+        <div class="last-header">
+          <div id="last-from" class="last-from">—</div>
+          <button id="btn-speak" class="icon" title="Speak the last message">🔊</button>
+        </div>
+        <div id="last-text" class="last-text">No messages yet.</div>
+      </section>
+
+      <section class="controls">
+        <button id="btn-mic" class="mic" title="Start/Stop voice">🎤</button>
+
+        <div class="send-row">
+          <input id="msg" class="input" maxlength="1000" placeholder="Type here…" />
+          <button id="btn-send" class="send" title="Send">➤</button>
+        </div>
+
+        <div id="status" class="tiny center"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
