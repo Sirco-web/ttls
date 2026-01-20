@@ -370,6 +370,7 @@ app.post('/api/tts', express.json({ limit: '10kb' }), async (req, res) => {
 const server = http.createServer(app);
 const wss = new WebSocket.Server({
   server,
+  path: '/ws',
   // Keep payload small (text messages only)
   maxPayload: 64 * 1024
 });

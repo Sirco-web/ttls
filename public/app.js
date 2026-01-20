@@ -49,7 +49,7 @@
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}`;
+    return `${proto}//${location.host}/ws`;
   }
 
   function setStatus(text) {
