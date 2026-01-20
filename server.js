@@ -527,6 +527,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Voice-Text Room running on http://localhost:${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`Voice-Text Room running on http://${HOST}:${PORT}`);
 });
