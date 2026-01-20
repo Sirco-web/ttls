@@ -507,9 +507,11 @@ app.post('/api/room/create', (req, res) => {
   const client = room.clients.get(clientId);
   client.events.push({ type: 'hello', clientId });
   client.events.push({ type: 'created', room: roomCode, clientId });
-  client.events.push({ type: 'presence', ...roomSnapshot(roomCode) });
 
-  res.json({ ok: true, clientId, room: roomCode });
+  const snapshot = roomSnapshot(roomCode);
+  client.events.push({ type: 'presence', ...snapshot });
+
+  res.json({ ok: true, clientId, room: roomCode, users: snapshot.users, count: snapshot.count });
 });
 
 // Join a room
@@ -536,9 +538,10 @@ app.post('/api/room/join', (req, res) => {
   client.events.push({ type: 'joined', room: roomCode, clientId });
 
   // Broadcast presence to all (including new joiner)
-  broadcast(roomCode, { type: 'presence', ...roomSnapshot(roomCode) });
+  const snapshot = roomSnapshot(roomCode);
+  broadcast(roomCode, { type: 'presence', ...snapshot });
 
-  res.json({ ok: true, clientId, room: roomCode });
+  res.json({ ok: true, clientId, room: roomCode, users: snapshot.users, count: snapshot.count });
 });
 
 // Leave a room

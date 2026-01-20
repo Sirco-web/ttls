@@ -200,7 +200,14 @@
 
       bigCode.textContent = room;
       roomCode.textContent = room;
-      setScreen(screenWait);
+      
+      // Use returned users to set screen immediately
+      users = data.users || [];
+      if ((data.count || users.length) >= 2) {
+        setScreen(screenChat);
+      } else {
+        setScreen(screenWait);
+      }
       setStatus('Connected');
 
       startPolling();
@@ -230,7 +237,14 @@
 
       bigCode.textContent = room;
       roomCode.textContent = room;
-      setScreen(screenWait);
+      
+      // Use returned users to set screen immediately
+      users = data.users || [];
+      if ((data.count || users.length) >= 2) {
+        setScreen(screenChat);
+      } else {
+        setScreen(screenWait);
+      }
       setStatus('Connected');
 
       startPolling();
