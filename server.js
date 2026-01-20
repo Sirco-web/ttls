@@ -5,7 +5,6 @@ const os = require('os');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const express = require('express');
-const WebSocket = require('ws');
 
 const PORT = Number(process.env.PORT || 3000);
 const MAX_MSG_CHARS = 1000;
@@ -368,17 +367,18 @@ app.post('/api/tts', express.json({ limit: '10kb' }), async (req, res) => {
 });
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({
-  server,
-  path: '/ws',
-  // Keep payload small (text messages only)
-  maxPayload: 64 * 1024
-});
 
 /**
- * Rooms: Map<roomCode, { clients: Map<clientId, { ws, name }>, createdAt: number }>
+ * Long-polling based room system (replaces WebSocket)
+ * Rooms: Map<roomCode, { clients: Map<clientId, { name, lastSeen, events: [] }>, createdAt }>
  */
 const rooms = new Map();
+
+// Pending poll requests: Map<clientId, { res, timer }>
+const pendingPolls = new Map();
+
+const POLL_TIMEOUT_MS = 30000; // 30 second long-poll timeout
+const CLIENT_TIMEOUT_MS = 60000; // Consider client gone after 60s no poll
 
 function randId(len = 8) {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -388,7 +388,6 @@ function randId(len = 8) {
 }
 
 function makeRoomCode() {
-  // 5 digits
   let code = '';
   for (let i = 0; i < 5; i++) code += String(Math.floor(Math.random() * 10));
   return code;
@@ -419,111 +418,235 @@ function safeText(s) {
   return trimmed.slice(0, MAX_MSG_CHARS);
 }
 
-function send(ws, obj) {
-  if (ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify(obj));
+// Send event to a specific client
+function sendToClient(clientId, event) {
+  // Find which room this client is in
+  for (const [roomCode, room] of rooms.entries()) {
+    const client = room.clients.get(clientId);
+    if (client) {
+      client.events.push(event);
+      flushClient(clientId);
+      return;
+    }
+  }
 }
 
-function broadcast(roomCode, obj) {
+// Broadcast event to all clients in a room
+function broadcast(roomCode, event) {
   const room = rooms.get(roomCode);
   if (!room) return;
-  const msg = JSON.stringify(obj);
-  for (const { ws } of room.clients.values()) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+  for (const [clientId, client] of room.clients.entries()) {
+    client.events.push(event);
+    flushClient(clientId);
   }
 }
 
-function cleanupEmptyRooms() {
-  for (const [code, room] of rooms.entries()) {
-    if (room.clients.size === 0) rooms.delete(code);
+// If client has pending poll and events, send them
+function flushClient(clientId) {
+  const pending = pendingPolls.get(clientId);
+  if (!pending) return;
+
+  // Find client's events
+  for (const room of rooms.values()) {
+    const client = room.clients.get(clientId);
+    if (client && client.events.length > 0) {
+      clearTimeout(pending.timer);
+      pendingPolls.delete(clientId);
+      const events = client.events.splice(0);
+      pending.res.json({ events });
+      return;
+    }
   }
 }
-setInterval(cleanupEmptyRooms, 60 * 1000).unref();
 
-wss.on('connection', (ws) => {
+// Cleanup stale clients and empty rooms
+function cleanup() {
+  const now = Date.now();
+  for (const [roomCode, room] of rooms.entries()) {
+    for (const [clientId, client] of room.clients.entries()) {
+      if (now - client.lastSeen > CLIENT_TIMEOUT_MS) {
+        room.clients.delete(clientId);
+        // Cancel any pending poll
+        const pending = pendingPolls.get(clientId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingPolls.delete(clientId);
+        }
+      }
+    }
+    // Broadcast presence if clients were removed
+    if (room.clients.size > 0) {
+      broadcast(roomCode, { type: 'presence', ...roomSnapshot(roomCode) });
+    }
+    // Remove empty rooms
+    if (room.clients.size === 0) {
+      rooms.delete(roomCode);
+    }
+  }
+}
+setInterval(cleanup, 30000).unref();
+
+// Client session store (maps clientId -> roomCode)
+const clientRooms = new Map();
+
+// --- Long-polling API endpoints ---
+
+app.use(express.json({ limit: '10kb' }));
+
+// Create a room
+app.post('/api/room/create', (req, res) => {
   const clientId = randId(10);
-  let joinedRoom = null;
-  let clientName = 'User';
+  const roomCode = createRoom();
+  const name = safeText(req.body.name) || 'User';
 
-  // Tell the client their ID right away
-  send(ws, { type: 'hello', clientId });
+  const room = rooms.get(roomCode);
+  room.clients.set(clientId, { name, lastSeen: Date.now(), events: [] });
+  clientRooms.set(clientId, roomCode);
 
-  ws.on('message', (buf) => {
-    let msg;
-    try {
-      msg = JSON.parse(buf.toString('utf8'));
-    } catch {
-      return;
+  // Queue initial events
+  const client = room.clients.get(clientId);
+  client.events.push({ type: 'hello', clientId });
+  client.events.push({ type: 'created', room: roomCode, clientId });
+  client.events.push({ type: 'presence', ...roomSnapshot(roomCode) });
+
+  res.json({ ok: true, clientId, room: roomCode });
+});
+
+// Join a room
+app.post('/api/room/join', (req, res) => {
+  const roomCode = safeText(req.body.room);
+  if (!roomCode || roomCode.length !== 5 || !/^[0-9]{5}$/.test(roomCode)) {
+    return res.status(400).json({ error: 'Room code must be 5 digits.' });
+  }
+
+  const room = rooms.get(roomCode);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found.' });
+  }
+
+  const clientId = randId(10);
+  const name = safeText(req.body.name) || 'User';
+
+  room.clients.set(clientId, { name, lastSeen: Date.now(), events: [] });
+  clientRooms.set(clientId, roomCode);
+
+  // Queue initial events for joiner
+  const client = room.clients.get(clientId);
+  client.events.push({ type: 'hello', clientId });
+  client.events.push({ type: 'joined', room: roomCode, clientId });
+
+  // Broadcast presence to all (including new joiner)
+  broadcast(roomCode, { type: 'presence', ...roomSnapshot(roomCode) });
+
+  res.json({ ok: true, clientId, room: roomCode });
+});
+
+// Leave a room
+app.post('/api/room/leave', (req, res) => {
+  const clientId = req.body.clientId;
+  const roomCode = clientRooms.get(clientId);
+
+  if (roomCode && rooms.has(roomCode)) {
+    const room = rooms.get(roomCode);
+    room.clients.delete(clientId);
+    clientRooms.delete(clientId);
+
+    // Cancel pending poll
+    const pending = pendingPolls.get(clientId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingPolls.delete(clientId);
     }
 
-    if (!msg || typeof msg.type !== 'string') return;
-
-    if (msg.type === 'create') {
-      const room = createRoom();
-      joinedRoom = room;
-      clientName = safeText(msg.name) || 'User';
-      const r = rooms.get(room);
-      r.clients.set(clientId, { ws, name: clientName });
-      send(ws, { type: 'created', room, clientId });
-      broadcast(room, { type: 'presence', ...roomSnapshot(room) });
-      return;
+    // Broadcast updated presence
+    if (room.clients.size > 0) {
+      broadcast(roomCode, { type: 'presence', ...roomSnapshot(roomCode) });
+    } else {
+      rooms.delete(roomCode);
     }
+  }
 
-    if (msg.type === 'join') {
-      const room = safeText(msg.room);
-      if (!room || room.length !== 5 || !/^[0-9]{5}$/.test(room)) {
-        send(ws, { type: 'error', message: 'Room code must be 5 digits.' });
-        return;
-      }
-      const r = rooms.get(room);
-      if (!r) {
-        send(ws, { type: 'error', message: 'Room not found.' });
-        return;
-      }
+  res.json({ ok: true });
+});
 
-      joinedRoom = room;
-      clientName = safeText(msg.name) || 'User';
-      r.clients.set(clientId, { ws, name: clientName });
-      send(ws, { type: 'joined', room, clientId });
-      broadcast(room, { type: 'presence', ...roomSnapshot(room) });
-      return;
-    }
+// Send a message
+app.post('/api/room/send', (req, res) => {
+  const clientId = req.body.clientId;
+  const text = safeText(req.body.text);
 
-    if (msg.type === 'leave') {
-      if (joinedRoom && rooms.has(joinedRoom)) {
-        const r = rooms.get(joinedRoom);
-        r.clients.delete(clientId);
-        broadcast(joinedRoom, { type: 'presence', ...roomSnapshot(joinedRoom) });
-      }
-      joinedRoom = null;
-      return;
-    }
+  if (!text) {
+    return res.status(400).json({ error: 'No text provided.' });
+  }
 
-    if (msg.type === 'msg') {
-      if (!joinedRoom || !rooms.has(joinedRoom)) {
-        send(ws, { type: 'error', message: 'Not in a room.' });
-        return;
-      }
-      const text = safeText(msg.text);
-      if (!text) return;
-      const payload = {
-        type: 'msg',
-        room: joinedRoom,
-        from: clientId,
-        fromName: clientName,
-        text,
-        ts: Date.now()
-      };
-      broadcast(joinedRoom, payload);
-      return;
-    }
-  });
+  const roomCode = clientRooms.get(clientId);
+  if (!roomCode || !rooms.has(roomCode)) {
+    return res.status(400).json({ error: 'Not in a room.' });
+  }
 
-  ws.on('close', () => {
-    if (joinedRoom && rooms.has(joinedRoom)) {
-      const r = rooms.get(joinedRoom);
-      r.clients.delete(clientId);
-      broadcast(joinedRoom, { type: 'presence', ...roomSnapshot(joinedRoom) });
+  const room = rooms.get(roomCode);
+  const client = room.clients.get(clientId);
+  if (!client) {
+    return res.status(400).json({ error: 'Client not found.' });
+  }
+
+  const payload = {
+    type: 'msg',
+    room: roomCode,
+    from: clientId,
+    fromName: client.name,
+    text,
+    ts: Date.now()
+  };
+
+  broadcast(roomCode, payload);
+  res.json({ ok: true });
+});
+
+// Long-poll for events
+app.get('/api/room/poll', (req, res) => {
+  const clientId = req.query.clientId;
+  const roomCode = clientRooms.get(clientId);
+
+  if (!roomCode || !rooms.has(roomCode)) {
+    return res.status(400).json({ error: 'Not in a room.' });
+  }
+
+  const room = rooms.get(roomCode);
+  const client = room.clients.get(clientId);
+  if (!client) {
+    return res.status(400).json({ error: 'Client not found.' });
+  }
+
+  // Update last seen
+  client.lastSeen = Date.now();
+
+  // If there are pending events, return immediately
+  if (client.events.length > 0) {
+    const events = client.events.splice(0);
+    return res.json({ events });
+  }
+
+  // Otherwise, hold the connection open (long-poll)
+  const timer = setTimeout(() => {
+    pendingPolls.delete(clientId);
+    res.json({ events: [] }); // Empty response on timeout
+  }, POLL_TIMEOUT_MS);
+
+  // Cancel any existing poll for this client
+  const existing = pendingPolls.get(clientId);
+  if (existing) {
+    clearTimeout(existing.timer);
+    existing.res.json({ events: [] });
+  }
+
+  pendingPolls.set(clientId, { res, timer });
+
+  // Handle client disconnect
+  req.on('close', () => {
+    const pending = pendingPolls.get(clientId);
+    if (pending && pending.res === res) {
+      clearTimeout(pending.timer);
+      pendingPolls.delete(clientId);
     }
   });
 });

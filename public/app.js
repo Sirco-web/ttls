@@ -32,10 +32,11 @@
   const btnSend = $('btn-send');
   const status = $('status');
 
-  let ws;
   let clientId = null;
   let room = null;
   let users = [];
+  let polling = false;
+  let pollAbort = null;
 
   let lastMsg = { from: null, text: '' };
 
@@ -45,11 +46,6 @@
     screenWait.classList.add('hidden');
     screenChat.classList.add('hidden');
     which.classList.remove('hidden');
-  }
-
-  function wsUrl() {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}/ws`;
   }
 
   function setStatus(text) {
@@ -81,7 +77,6 @@
     bigCode.textContent = p.room || room || '00000';
     roomCode.textContent = p.room || room || '00000';
 
-    // If alone, show wait; otherwise show chat
     if ((p.count || users.length) <= 1) {
       setScreen(screenWait);
     } else {
@@ -91,71 +86,203 @@
     updateStars(lastMsg.from);
   }
 
-  function connectIfNeeded() {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  // --- Long-polling for events ---
+  async function poll() {
+    if (!polling || !clientId) return;
 
-    ws = new WebSocket(wsUrl());
+    try {
+      pollAbort = new AbortController();
+      const res = await fetch('/api/room/poll?clientId=' + encodeURIComponent(clientId), {
+        signal: pollAbort.signal
+      });
 
-    ws.addEventListener('open', () => {
-      setStatus('Connected');
-    });
-
-    ws.addEventListener('close', () => {
-      setStatus('Disconnected');
-    });
-
-    ws.addEventListener('message', (ev) => {
-      let data;
-      try { data = JSON.parse(ev.data); } catch { return; }
-
-      if (data.type === 'hello') {
-        clientId = data.clientId;
-        return;
+      if (!res.ok) {
+        if (res.status === 400) {
+          stopPolling();
+          setScreen(screenHome);
+          setStatus('Disconnected');
+          return;
+        }
+        throw new Error('Poll failed');
       }
 
-      if (data.type === 'created' || data.type === 'joined') {
-        room = data.room;
-        bigCode.textContent = room;
-        roomCode.textContent = room;
-        // Initially show wait; presence updates decide
-        setScreen(screenWait);
-        setStatus('Connected');
-        return;
+      const data = await res.json();
+      const events = data.events || [];
+
+      for (const event of events) {
+        handleEvent(event);
       }
 
-      if (data.type === 'presence') {
-        updatePresence(data);
-        return;
+      if (polling) {
+        setTimeout(poll, 100);
       }
-
-      if (data.type === 'msg') {
-        // Show the last message big at the top
-        const isMe = data.from === clientId;
-        const who = isMe ? 'You' : (data.fromName || 'Other');
-
-        lastMsg = { from: data.from, text: data.text };
-
-        lastFrom.textContent = `${who}`;
-        lastText.textContent = data.text;
-
-        updateStars(data.from);
-
-        // Optional: auto-speak incoming messages
-        // (kept off to save attention/battery)
-        return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      console.error('Poll error:', err);
+      if (polling) {
+        setTimeout(poll, 2000);
       }
-
-      if (data.type === 'error') {
-        alert(data.message || 'Error');
-        setScreen(screenHome);
-        return;
-      }
-    });
+    }
   }
 
-  function send(obj) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify(obj));
+  function startPolling() {
+    if (polling) return;
+    polling = true;
+    poll();
+  }
+
+  function stopPolling() {
+    polling = false;
+    if (pollAbort) {
+      pollAbort.abort();
+      pollAbort = null;
+    }
+  }
+
+  function handleEvent(data) {
+    if (data.type === 'hello') {
+      clientId = data.clientId;
+      return;
+    }
+
+    if (data.type === 'created' || data.type === 'joined') {
+      room = data.room;
+      bigCode.textContent = room;
+      roomCode.textContent = room;
+      setScreen(screenWait);
+      setStatus('Connected');
+      return;
+    }
+
+    if (data.type === 'presence') {
+      updatePresence(data);
+      return;
+    }
+
+    if (data.type === 'msg') {
+      const isMe = data.from === clientId;
+      const who = isMe ? 'You' : (data.fromName || 'Other');
+
+      lastMsg = { from: data.from, text: data.text };
+
+      lastFrom.textContent = who;
+      lastText.textContent = data.text;
+
+      updateStars(data.from);
+      return;
+    }
+
+    if (data.type === 'error') {
+      alert(data.message || 'Error');
+      setScreen(screenHome);
+      return;
+    }
+  }
+
+  // --- API calls ---
+  async function apiCreate() {
+    try {
+      setStatus('Creating room…');
+      const res = await fetch('/api/room/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: safeName() })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to create room');
+      }
+
+      const data = await res.json();
+      clientId = data.clientId;
+      room = data.room;
+
+      bigCode.textContent = room;
+      roomCode.textContent = room;
+      setScreen(screenWait);
+      setStatus('Connected');
+
+      startPolling();
+    } catch (err) {
+      alert(err.message || 'Could not create room');
+      setStatus('');
+    }
+  }
+
+  async function apiJoin(roomCodeVal) {
+    try {
+      setStatus('Joining room…');
+      const res = await fetch('/api/room/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: roomCodeVal, name: safeName() })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to join room');
+      }
+
+      const data = await res.json();
+      clientId = data.clientId;
+      room = data.room;
+
+      bigCode.textContent = room;
+      roomCode.textContent = room;
+      setScreen(screenWait);
+      setStatus('Connected');
+
+      startPolling();
+    } catch (err) {
+      alert(err.message || 'Could not join room');
+      setStatus('');
+    }
+  }
+
+  async function apiLeave() {
+    if (!clientId) return;
+
+    stopPolling();
+
+    try {
+      await fetch('/api/room/leave', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId })
+      });
+    } catch {}
+
+    clientId = null;
+    room = null;
+    users = [];
+    lastMsg = { from: null, text: '' };
+    lastFrom.textContent = '—';
+    lastText.textContent = 'No messages yet.';
+    updateStars(null);
+    setScreen(screenHome);
+    setStatus('');
+  }
+
+  async function apiSend(text) {
+    if (!clientId || !text) return;
+
+    try {
+      const res = await fetch('/api/room/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId, text })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to send');
+      }
+    } catch (err) {
+      console.error('Send error:', err);
+      setStatus('Failed to send');
+      setTimeout(() => setStatus(''), 2000);
+    }
   }
 
   // --- Home actions
@@ -165,18 +292,16 @@
   });
 
   btnCreate.addEventListener('click', () => {
-    connectIfNeeded();
-    send({ type: 'create', name: safeName() });
+    apiCreate();
   });
 
   btnJoinGo.addEventListener('click', () => {
-    connectIfNeeded();
     const code = safeRoom();
     if (code.length !== 5) {
       alert('Room code must be 5 digits.');
       return;
     }
-    send({ type: 'join', room: code, name: safeName() });
+    apiJoin(code);
   });
 
   roomInput.addEventListener('input', () => {
@@ -201,25 +326,14 @@
     }
   });
 
-  function leaveRoom() {
-    try { send({ type: 'leave' }); } catch {}
-    room = null;
-    users = [];
-    lastMsg = { from: null, text: '' };
-    lastFrom.textContent = '—';
-    lastText.textContent = 'No messages yet.';
-    updateStars(null);
-    setScreen(screenHome);
-  }
-
-  btnLeave.addEventListener('click', leaveRoom);
-  btnLeave2.addEventListener('click', leaveRoom);
+  btnLeave.addEventListener('click', apiLeave);
+  btnLeave2.addEventListener('click', apiLeave);
 
   // --- Send text
   function doSendText() {
     const text = (msgInput.value || '').trim();
     if (!text) return;
-    send({ type: 'msg', text });
+    apiSend(text);
     msgInput.value = '';
     msgInput.focus();
   }
@@ -233,7 +347,6 @@
   btnSpeak.addEventListener('click', () => {
     const text = (lastMsg.text || '').trim();
     if (!text) return;
-    // Try server-side TTS first, fallback to browser TTS
     fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -250,7 +363,6 @@
         audio.onended = () => URL.revokeObjectURL(url);
       })
       .catch(() => {
-        // Fallback to browser TTS
         if (!('speechSynthesis' in window)) {
           alert('Text-to-speech is not available.');
           return;
@@ -267,16 +379,14 @@
       });
   });
 
-  // --- Voice-to-text via server-side STT (MediaRecorder + upload)
-  // Records audio as Opus/WebM, uploads to /api/stt, gets transcription
-  const MAX_RECORD_DURATION = 20000; // 20 seconds max
+  // --- Voice-to-text via server-side STT
+  const MAX_RECORD_DURATION = 20000;
   let mediaRecorder = null;
   let audioChunks = [];
   let recordingTimeout = null;
   let isRecording = false;
 
   function getMimeType() {
-    // Prefer opus in webm, fallback to ogg
     if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
       return 'audio/webm;codecs=opus';
     }
@@ -315,7 +425,7 @@
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = getMimeType();
       if (!mimeType) {
-        showToast('Audio recording not supported in this browser');
+        showToast('Audio recording not supported');
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
@@ -330,7 +440,6 @@
       };
 
       mediaRecorder.onstop = async () => {
-        // Stop all tracks
         stream.getTracks().forEach((t) => t.stop());
         clearTimeout(recordingTimeout);
 
@@ -342,14 +451,12 @@
         const blob = new Blob(audioChunks, { type: mimeType });
         audioChunks = [];
 
-        // Check size (rough limit)
         if (blob.size > 8 * 1024 * 1024) {
-          showToast('Recording too large. Try shorter.');
+          showToast('Recording too large');
           setMicUI(false);
           return;
         }
 
-        // Upload to server
         setMicUI(false, true);
         setStatus('Transcribing…');
 
@@ -364,7 +471,7 @@
 
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || `Server error ${res.status}`);
+            throw new Error(err.error || 'Server error');
           }
 
           const data = await res.json();
@@ -379,7 +486,7 @@
           }
         } catch (err) {
           console.error('STT error:', err);
-          showToast('Transcription failed: ' + (err.message || 'Unknown error'));
+          showToast('Transcription failed');
         } finally {
           setMicUI(false);
         }
@@ -396,7 +503,6 @@
       setMicUI(true);
       setStatus('Recording… (tap to stop)');
 
-      // Auto-stop after max duration
       recordingTimeout = setTimeout(() => {
         if (mediaRecorder && mediaRecorder.state === 'recording') {
           mediaRecorder.stop();
@@ -404,7 +510,7 @@
       }, MAX_RECORD_DURATION);
 
     } catch (err) {
-      console.error('Mic access error:', err);
+      console.error('Mic error:', err);
       if (err.name === 'NotAllowedError') {
         showToast('Microphone access denied');
       } else {
@@ -437,6 +543,5 @@
     roomInput.value = autoRoom;
   }
 
-  // Start at home
   setScreen(screenHome);
 })();
