@@ -9,6 +9,8 @@
   const roomInput = $('room');
   const joinRow = $('join-row');
 
+  const createRoomInput = $('create-room');
+
   const btnCreate = $('btn-create');
   const btnJoin = $('btn-join');
   const btnJoinGo = $('btn-join-go');
@@ -58,6 +60,10 @@
 
   function safeRoom() {
     return (roomInput.value || '').replace(/\D/g, '').slice(0, 5);
+  }
+
+  function safeCreateRoom() {
+    return (createRoomInput?.value || '').replace(/\D/g, '').slice(0, 5);
   }
 
   function updateStars(fromId) {
@@ -180,13 +186,16 @@
   }
 
   // --- API calls ---
-  async function apiCreate() {
+  async function apiCreate(roomCodeVal = '') {
     try {
       setStatus('Creating room…');
+      const body = { name: safeName() };
+      if (roomCodeVal) body.room = roomCodeVal;
+
       const res = await fetch('/api/room/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: safeName() })
+        body: JSON.stringify(body)
       });
 
       if (!res.ok) {
@@ -200,7 +209,7 @@
 
       bigCode.textContent = room;
       roomCode.textContent = room;
-      
+
       // Use returned users to set screen immediately
       users = data.users || [];
       if ((data.count || users.length) >= 2) {
@@ -237,7 +246,7 @@
 
       bigCode.textContent = room;
       roomCode.textContent = room;
-      
+
       // Use returned users to set screen immediately
       users = data.users || [];
       if ((data.count || users.length) >= 2) {
@@ -306,7 +315,12 @@
   });
 
   btnCreate.addEventListener('click', () => {
-    apiCreate();
+    const code = safeCreateRoom();
+    if (code && code.length !== 5) {
+      alert('Room code must be 5 digits.');
+      return;
+    }
+    apiCreate(code);
   });
 
   btnJoinGo.addEventListener('click', () => {
@@ -321,6 +335,12 @@
   roomInput.addEventListener('input', () => {
     roomInput.value = safeRoom();
   });
+
+  if (createRoomInput) {
+    createRoomInput.addEventListener('input', () => {
+      createRoomInput.value = safeCreateRoom();
+    });
+  }
 
   // --- Copy link
   function roomLink() {
