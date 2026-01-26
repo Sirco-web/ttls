@@ -393,7 +393,19 @@ function makeRoomCode() {
   return code;
 }
 
-function createRoom() {
+function createRoom(roomCodeRequested = '') {
+  if (roomCodeRequested) {
+    const code = String(roomCodeRequested);
+    if (code.length !== 5 || !/^[0-9]{5}$/.test(code)) {
+      throw new Error('Room code must be 5 digits.');
+    }
+    if (rooms.has(code)) {
+      throw new Error('Room code already in use.');
+    }
+    rooms.set(code, { clients: new Map(), createdAt: Date.now() });
+    return code;
+  }
+
   for (let i = 0; i < 10000; i++) {
     const code = makeRoomCode();
     if (!rooms.has(code)) {
@@ -496,8 +508,15 @@ app.use(express.json({ limit: '10kb' }));
 // Create a room
 app.post('/api/room/create', (req, res) => {
   const clientId = randId(10);
-  const roomCode = createRoom();
   const name = safeText(req.body.name) || 'User';
+
+  let roomCode;
+  try {
+    const requested = safeText(req.body.room);
+    roomCode = createRoom(requested);
+  } catch (e) {
+    return res.status(400).json({ error: e.message || 'Could not create room' });
+  }
 
   const room = rooms.get(roomCode);
   room.clients.set(clientId, { name, lastSeen: Date.now(), events: [] });
