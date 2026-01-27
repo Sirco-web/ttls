@@ -15,21 +15,21 @@
         <label class="label">Your name (optional)</label>
         <input id="name" class="input" maxlength="20" placeholder="Timour" />
 
-        <label class="label">Create room code (optional)</label>
-        <input id="create-room" class="input" inputmode="numeric" maxlength="5" placeholder="12345" />
+        <label class="label">Your own room code (optional - leave empty for random)</label>
+        <input id="create-room" class="input" inputmode="numeric" maxlength="5" placeholder="e.g. 12345" pattern="[0-9]*" />
 
         <div class="row">
-          <button id="btn-create" class="btn primary">Create link</button>
-          <button id="btn-join" class="btn">Join link</button>
+          <button id="btn-create" class="btn primary">Create Room</button>
+          <button id="btn-join" class="btn">Join Room</button>
         </div>
 
         <div id="join-row" class="row hidden">
-          <input id="room" class="input" inputmode="numeric" maxlength="5" placeholder="12345" />
+          <input id="room" class="input" inputmode="numeric" maxlength="5" placeholder="Enter 5-digit code" pattern="[0-9]*" />
           <button id="btn-join-go" class="btn primary">Join</button>
         </div>
 
         <p class="tiny" id="home-hint">
-          Creates a 5-digit room code. Share it. Only text messages go over the network.
+          Enter your own 5-digit code or leave empty for a random one. Share the code to let others join!
         </p>
       </div>
     </section>

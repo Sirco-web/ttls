@@ -67,13 +67,15 @@
   }
 
   function updateStars(fromId) {
-    const youStar = fromId === clientId ? ' ⭐' : '';
+    const youStar = fromId && fromId === clientId ? ' ⭐' : '';
     const otherStar = fromId && fromId !== clientId ? ' ⭐' : '';
 
-    lblYou.textContent = 'You' + youStar;
+    const you = users.find((u) => u.id === clientId);
+    const youName = you?.name || 'You';
+    lblYou.textContent = youName + youStar;
 
     const other = users.find((u) => u.id !== clientId);
-    const otherName = other?.name ? other.name : 'Other';
+    const otherName = other?.name || 'Other';
     lblOther.textContent = otherName + otherStar;
   }
 
@@ -223,6 +225,7 @@
     } catch (err) {
       alert(err.message || 'Could not create room');
       setStatus('');
+      setScreen(screenHome);
     }
   }
 
@@ -260,6 +263,7 @@
     } catch (err) {
       alert(err.message || 'Could not join room');
       setStatus('');
+      setScreen(screenHome);
     }
   }
 
@@ -316,8 +320,9 @@
 
   btnCreate.addEventListener('click', () => {
     const code = safeCreateRoom();
-    if (code && code.length !== 5) {
-      alert('Room code must be 5 digits.');
+    if (code && (code.length !== 5 || !/^[0-9]{5}$/.test(code))) {
+      alert('Room code must be exactly 5 digits (0-9).');
+      createRoomInput.focus();
       return;
     }
     apiCreate(code);
@@ -336,9 +341,33 @@
     roomInput.value = safeRoom();
   });
 
+  // Allow Enter key to join from room input
+  roomInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const code = safeRoom();
+      if (code.length === 5) {
+        apiJoin(code);
+      } else {
+        alert('Room code must be 5 digits.');
+      }
+    }
+  });
+
   if (createRoomInput) {
     createRoomInput.addEventListener('input', () => {
       createRoomInput.value = safeCreateRoom();
+    });
+    
+    // Allow Enter key to create room
+    createRoomInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const code = safeCreateRoom();
+        if (!code || code.length === 5) {
+          apiCreate(code);
+        } else {
+          alert('Room code must be exactly 5 digits.');
+        }
+      }
     });
   }
 
@@ -569,12 +598,18 @@
   });
 
   // --- Auto join from URL
-  const url = new URL(location.href);
-  const autoRoom = url.searchParams.get('room');
+  const pageUrl = new URL(location.href);
+  const autoRoom = pageUrl.searchParams.get('room');
   if (autoRoom && /^[0-9]{5}$/.test(autoRoom)) {
     setScreen(screenHome);
     joinRow.classList.remove('hidden');
     roomInput.value = autoRoom;
+    // Auto-join after a short delay so user can see what's happening
+    setTimeout(() => {
+      if (!clientId) {
+        apiJoin(autoRoom);
+      }
+    }, 500);
   }
 
   setScreen(screenHome);

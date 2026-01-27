@@ -395,12 +395,12 @@ function makeRoomCode() {
 
 function createRoom(roomCodeRequested = '') {
   if (roomCodeRequested) {
-    const code = String(roomCodeRequested);
-    if (code.length !== 5 || !/^[0-9]{5}$/.test(code)) {
-      throw new Error('Room code must be 5 digits.');
+    const code = String(roomCodeRequested).replace(/\D/g, '').slice(0, 5);
+    if (code.length !== 5) {
+      throw new Error('Room code must be exactly 5 digits.');
     }
     if (rooms.has(code)) {
-      throw new Error('Room code already in use.');
+      throw new Error('Room code "' + code + '" is already in use. Try a different code.');
     }
     rooms.set(code, { clients: new Map(), createdAt: Date.now() });
     return code;
@@ -413,7 +413,7 @@ function createRoom(roomCodeRequested = '') {
       return code;
     }
   }
-  throw new Error('Could not create room');
+  throw new Error('Could not create room. Please try again.');
 }
 
 function roomSnapshot(roomCode) {
@@ -535,14 +535,14 @@ app.post('/api/room/create', (req, res) => {
 
 // Join a room
 app.post('/api/room/join', (req, res) => {
-  const roomCode = safeText(req.body.room);
-  if (!roomCode || roomCode.length !== 5 || !/^[0-9]{5}$/.test(roomCode)) {
-    return res.status(400).json({ error: 'Room code must be 5 digits.' });
+  const roomCode = safeText(req.body.room).replace(/\D/g, '');
+  if (!roomCode || roomCode.length !== 5) {
+    return res.status(400).json({ error: 'Room code must be exactly 5 digits.' });
   }
 
   const room = rooms.get(roomCode);
   if (!room) {
-    return res.status(404).json({ error: 'Room not found.' });
+    return res.status(404).json({ error: 'Room "' + roomCode + '" not found. Check the code and try again.' });
   }
 
   const clientId = randId(10);
